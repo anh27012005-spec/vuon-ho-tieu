@@ -83,6 +83,8 @@ Semaphore là cờ báo hiệu dùng để **đồng bộ** hoặc **bảo vệ 
 
 ### 3.1. Sơ đồ khối hệ thống
 
+![Sơ đồ khối hệ thống](images/so-do-khoi.png)
+
 ```mermaid
 flowchart LR
     DHT[DHT22] --> ESP[ESP32]
@@ -135,7 +137,9 @@ Thư viện sử dụng ([libraries.txt](firmware/libraries.txt)):
 | `dataQueue` | 10 | `SensorData_t` (nhiệt độ, độ ẩm) | Task đọc data | Task truyền data | Giữ được 10 lần đo (20 giây) khi mất mạng, có mạng lại thì gửi bù |
 | `alertQueue` | 1 | `float` (độ ẩm) | Task đọc data (`xQueueOverwrite`) | Task cảnh báo | Luôn giữ giá trị mới nhất, không dồn giá trị cũ khi máy đang phun |
 
-**Luồng dữ liệu giữa các task:**
+**Kiến trúc RTOS và luồng dữ liệu giữa các task:**
+
+![Kiến trúc FreeRTOS](images/kien-truc-rtos.png)
 
 ```mermaid
 flowchart LR
@@ -325,7 +329,7 @@ Serial hiển thị nhiệt độ, độ ẩm mỗi 2 giây và dòng gửi MQTT
 
 | Độ ẩm 39% (25%, 10s) | Độ ẩm 32% (50%, 20s) | Độ ẩm 17% (100%, 30s) |
 |---|---|---|
-| ![38%](images/phun-38.png) | ![32%](images/phun-32.png) | ![25%](images/phun-25.png) |
+| (xem báo cáo Word) | ![32%](images/phun-32.png) | ![25%](images/phun-25.png) |
 
 ### 5.3. Giao diện Web và điều khiển
 
