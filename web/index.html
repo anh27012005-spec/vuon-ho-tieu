@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vườn cà phê - hồ tiêu</title>
+  <!-- Thư viện MQTT cho trình duyệt và thư viện vẽ biểu đồ -->
+  <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: Arial, sans-serif;
+      background: #eef3ee;
+      color: #1f2d1f;
+    }
+    h1 { text-align: center; color: #2e5e2e; margin: 8px 0 4px; }
+    .status { text-align: center; margin-bottom: 16px; font-weight: bold; }
+    .online { color: #2e7d32; }
+    .offline { color: #c62828; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+      gap: 16px;
+      max-width: 1000px;
+      margin: 0 auto 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      text-align: center;
+    }
+    .card h3 { margin: 0 0 8px; color: #555; font-size: 16px; }
+
+    /* Thẻ hiển thị số */
+    .temp-value, .humi-value { font-size: 48px; font-weight: bold; }
+    .temp-value { color: #e65100; }
+    .humi-value { color: #1565c0; }
+    .note { font-size: 14px; color: #666; margin-top: 6px; }
+
+    /* Nút điều khiển */
+    .btn {
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #fff;
+      background: #9e9e9e;
+    }
+    .btn.on { background: #2e7d32; }
+
+    .mist-value { font-size: 32px; font-weight: bold; color: #00838f; }
+  </style>
+</head>
+<body>
+  <h1>Giám sát vườn cà phê - hồ tiêu</h1>
+  <div class="status offline" id="status">Đang kết nối MQTT...</div>
+
+  <!-- 2 thẻ hiển thị nhiệt độ, độ ẩm -->
+  <div class="grid">
+    <div class="card">
+      <h3>Nhiệt độ</h3>
+      <div class="temp-value" id="temp">--</div>
+      <div class="note">°C</div>
+    </div>
+    <div class="card">
+      <h3>Độ ẩm</h3>
+      <div class="humi-value" id="humi">--</div>
+      <div class="note" id="humiNote">Mức tốt: 40% - 60%</div>
+    </div>
+  </div>
+
+  <!-- 2 biểu đồ thời gian thực -->
+  <div class="grid">
+    <div class="card"><h3>Biểu đồ nhiệt độ</h3><canvas id="tempChart"></canvas></div>
+    <div class="card"><h3>Biểu đồ độ ẩm</h3><canvas id="humiChart"></canvas></div>
+  </div>
+
+  <!-- 2 nút điều khiển máy bơm, quạt và trạng thái máy phun sương -->
+  <div class="grid">
+    <div class="card">
+      <h3>Máy bơm</h3>
+      <button class="btn" id="pumpBtn" onclick="toggle('pump')">TẮT</button>
+    </div>
+    <div class="card">
+      <h3>Quạt</h3>
+      <button class="btn" id="fanBtn" onclick="toggle('fan')">TẮT</button>
+    </div>
+    <div class="card">
+      <h3>Máy phun sương (tự động)</h3>
+      <div class="mist-value" id="mist">0%</div>
+    </div>
+  </div>
+
+  <script>
+    // Cấu hình MQTT, topic phải giống trong code ESP32
+    const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+    const TOPIC_DATA  = "vuoncafe/nanh/data";
+    const TOPIC_STATE = "vuoncafe/nanh/state";
+    const TOPIC_CMD   = "vuoncafe/nanh/cmd";
+    const MAX_POINTS = 20;   // Số điểm hiển thị trên biểu đồ
+
+    // Trạng thái thiết bị hiện tại
+    let state = { pump: false, fan: false, mist: 0 };
+
+    // Tạo biểu đồ đường
+    function createChart(id, label, color) {
+      return new Chart(document.getElementById(id), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [{ label: label, data: [], borderColor: color, tension: 0.3, fill: false }]
+        },
+        options: { animation: false, scales: { y: { beginAtZero: false } } }
+      });
+    }
+    const tempChart = createChart("tempChart", "Nhiệt độ (°C)", "#e65100");
+    const humiChart = createChart("humiChart", "Độ ẩm (%)", "#1565c0");
+
+    // Thêm điểm mới vào biểu đồ, giữ tối đa MAX_POINTS điểm
+    function addPoint(chart, value) {
+      const time = new Date().toLocaleTimeString();
+      chart.data.labels.push(time);
+      chart.data.datasets[0].data.push(value);
+      if (chart.data.labels.length > MAX_POINTS) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+      }
+      chart.update();
+    }
+
+    // Cập nhật màu và chữ của nút theo trạng thái
+    function updateButtons() {
+      const pumpBtn = document.getElementById("pumpBtn");
+      const fanBtn = document.getElementById("fanBtn");
+      pumpBtn.textContent = state.pump ? "BẬT" : "TẮT";
+      pumpBtn.classList.toggle("on", state.pump);
+      fanBtn.textContent = state.fan ? "BẬT" : "TẮT";
+      fanBtn.classList.toggle("on", state.fan);
+      document.getElementById("mist").textContent = state.mist + "%";
+    }
+
+    // Kết nối broker
+    const client = mqtt.connect(BROKER, {
+      clientId: "web-cafe-" + Math.random().toString(16).slice(2, 8)
+    });
+
+    client.on("connect", () => {
+      document.getElementById("status").textContent = "Đã kết nối MQTT";
+      document.getElementById("status").className = "status online";
+      client.subscribe([TOPIC_DATA, TOPIC_STATE]);
+    });
+
+    client.on("close", () => {
+      document.getElementById("status").textContent = "Mất kết nối MQTT";
+      document.getElementById("status").className = "status offline";
+    });
+
+    // Nhận dữ liệu từ ESP32
+    client.on("message", (topic, message) => {
+      let data;
+      try { data = JSON.parse(message.toString()); } catch (e) { return; }
+
+      if (topic === TOPIC_DATA) {
+        const t = data.temperature;
+        const h = data.humidity;
+        document.getElementById("temp").textContent = t.toFixed(1);
+        document.getElementById("humi").textContent = h.toFixed(1);
+
+        // Nhận xét độ ẩm theo ngưỡng 40% - 60%
+        let note = "Độ ẩm tốt";
+        if (h < 40) note = "Độ ẩm thấp, máy phun sương đang hoạt động";
+        else if (h > 60) note = "Độ ẩm cao, nên bật quạt";
+        document.getElementById("humiNote").textContent = note;
+
+        addPoint(tempChart, t);
+        addPoint(humiChart, h);
+      }
+
+      if (topic === TOPIC_STATE) {
+        state = data;
+        updateButtons();
+      }
+    });
+
+    // Gửi lệnh bật/tắt máy bơm hoặc quạt (chế độ manual)
+    function toggle(device) {
+      const newState = state[device] ? 0 : 1;
+      const cmd = JSON.stringify({ device: device, state: newState });
+      client.publish(TOPIC_CMD, cmd);
+    }
+  </script>
+</body>
+</html>
